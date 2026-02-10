@@ -61,3 +61,39 @@ Useful options:
 ```bash
 python strategy.py --execute --lookback-days 220 --as-of 2026-02-01
 ```
+
+## Ralph Wiggum Setup (Autonomous Spec Loop)
+
+This repo is wired for Ralph Wiggum using files from
+`https://github.com/fstandhartinger/ralph-wiggum`.
+
+### Added Ralph files
+
+- `scripts/ralph-loop.sh`
+- `scripts/ralph-loop-codex.sh`
+- `scripts/rlm-subcall.sh`
+- `scripts/lib/nr_of_tries.sh`
+- `PROMPT_build.md`, `PROMPT_plan.md`
+- `.specify/memory/constitution.md`
+- `AGENTS.md`, `CLAUDE.md`
+- `.cursor/commands/speckit.specify.md`, `.cursor/commands/speckit.implement.md`
+
+### First use
+
+1. Create specs in `specs/` (at least one `*.md` spec file).
+2. Run a loop script:
+
+```bash
+./scripts/ralph-loop.sh --help
+./scripts/ralph-loop-codex.sh --help
+```
+
+Then run actual loop mode when ready:
+
+```bash
+./scripts/ralph-loop.sh
+# or
+./scripts/ralph-loop-codex.sh
+```
+
+By constitution, YOLO mode is set to **DISABLED** in this project (`.specify/memory/constitution.md`).
