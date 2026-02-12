@@ -62,6 +62,43 @@ Useful options:
 python strategy.py --execute --lookback-days 220 --as-of 2026-02-01
 ```
 
+## Static PV-Style Dashboard (GitHub Pages)
+
+Build the static dashboard locally:
+
+```bash
+python scripts/build_dashboard.py
+```
+
+Generated artifacts:
+
+- `docs/index.html` (dashboard)
+- `docs/metrics.csv`
+- `docs/returns.csv`
+- `docs/drawdowns.csv`
+- `docs/metadata.json`
+
+Backtest/report assumptions implemented:
+
+- Warmup start: `2006-12-31`
+- Simulation window: `2007-01-01` through `2026-01-31` (inclusive, trading-calendar aware)
+- Adjusted prices via `yfinance` with `auto_adjust=True`
+- Rebalance: month-end close
+- Signal: top-3 by 126-trading-day momentum
+- Trend filter: 135-trading-day SMA (`price > SMA135`)
+- Sleeve-to-cash behavior when SMA fails
+- Benchmarks: universe equal-weight (monthly rebalanced) + `VFINX`
+- Cash return assumption: 0.00% annualized
+
+## GitHub Actions monthly refresh
+
+Workflow file: `.github/workflows/monthly-refresh.yml`
+
+- Runs monthly and on manual dispatch
+- Rebuilds static dashboard
+- Deploys to GitHub Pages
+- Sends Discord success notification if `DISCORD_WEBHOOK_URL` secret is configured
+
 ## Ralph Wiggum Setup (Autonomous Spec Loop)
 
 This repo is wired for Ralph Wiggum using files from

@@ -1,0 +1,61 @@
+name: Monthly Dashboard Refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 4 1 * *' # 00:15 America/New_York (approx, DST varies)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build static dashboard
+        run: python scripts/build_dashboard.py
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Discord success notification
+        if: success() && secrets.DISCORD_WEBHOOK_URL != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+        run: |
+          TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          MSG="✅ PV-Style Momentum Dashboard refreshed successfully. Simulation end: 2026-01-31. URL: ${PAGE_URL}. Build timestamp (UTC): ${TS}"
+          jq -n --arg content "$MSG" '{content:$content}' | \
+            curl -sS -X POST -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL"
