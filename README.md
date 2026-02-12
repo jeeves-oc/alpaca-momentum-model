@@ -64,6 +64,8 @@ python strategy.py --execute --lookback-days 220 --as-of 2026-02-01
 
 ## Static PV-Style Dashboard (GitHub Pages)
 
+Live Pages URL: https://jeeves-oc.github.io/alpaca-momentum-model/
+
 Build the static dashboard locally:
 
 ```bash
