@@ -215,7 +215,7 @@ def metrics_table(rets: pd.DataFrame) -> pd.DataFrame:
 
 
 def monthly_table(r: pd.Series) -> pd.DataFrame:
-    m = (1 + r).resample("M").prod() - 1
+    m = (1 + r).resample("ME").prod() - 1
     df = pd.DataFrame({"ret": m})
     df["Year"] = df.index.year
     df["Month"] = df.index.month
