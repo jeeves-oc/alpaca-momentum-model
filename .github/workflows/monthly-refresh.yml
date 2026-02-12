@@ -61,6 +61,7 @@ jobs:
           fi
 
           TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          MSG="✅ PV-Style Momentum Dashboard refreshed successfully. Simulation end: 2026-01-31. URL: ${PAGE_URL}. Build timestamp (UTC): ${TS}"
+          SIM_END=$(jq -r '.sim_end' docs/metadata.json)
+          MSG="✅ PV-Style Momentum Dashboard refreshed successfully. Simulation end: ${SIM_END}. URL: ${PAGE_URL}. Build timestamp (UTC): ${TS}"
           jq -n --arg content "$MSG" '{content:$content}' | \
             curl -sS -X POST -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL"
