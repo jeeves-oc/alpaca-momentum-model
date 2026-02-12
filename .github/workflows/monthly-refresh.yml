@@ -50,11 +50,16 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Discord success notification
-        if: success() && secrets.DISCORD_WEBHOOK_URL != ''
+        if: success()
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           PAGE_URL: ${{ steps.deploy.outputs.page_url }}
         run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping notification."
+            exit 0
+          fi
+
           TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           MSG="✅ PV-Style Momentum Dashboard refreshed successfully. Simulation end: 2026-01-31. URL: ${PAGE_URL}. Build timestamp (UTC): ${TS}"
           jq -n --arg content "$MSG" '{content:$content}' | \
