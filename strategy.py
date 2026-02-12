@@ -18,6 +18,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from math import ceil
 from typing import Dict, List
 
 import pandas as pd
@@ -69,9 +70,20 @@ def get_trading_client() -> TradingClient:
     return TradingClient(api_key, secret_key, paper=paper)
 
 
+def required_lookback_trading_days() -> int:
+    # Need one extra bar for pct_change plus enough bars for SMA.
+    return max(SMA_WINDOW, MOMENTUM_LOOKBACK_TRADING_DAYS + 1)
+
+
+def trading_days_to_calendar_days(trading_days: int, extra_calendar_buffer: int = 21) -> int:
+    # Approximate 5 trading days/week + extra room for holidays and sparse data.
+    return ceil((trading_days * 7) / 5) + extra_calendar_buffer
+
+
 def fetch_prices(symbols: List[str], period_days: int) -> pd.DataFrame:
-    # Small buffer in case of holidays/weekends
-    period = f"{max(period_days, 180)}d"
+    # Enforce minimum warm-start history so first actionable rebalance is available.
+    min_calendar_days = trading_days_to_calendar_days(required_lookback_trading_days())
+    period = f"{max(period_days, min_calendar_days)}d"
     data = yf.download(
         tickers=symbols,
         period=period,
@@ -193,7 +205,16 @@ def main() -> None:
     mode = "EXECUTE" if execute else "DRY-RUN"
     logging.info("Starting strategy in %s mode", mode)
 
-    closes = fetch_prices(UNIVERSE, period_days=args.lookback_days)
+    min_history_days = trading_days_to_calendar_days(required_lookback_trading_days())
+    effective_lookback_days = max(args.lookback_days, min_history_days)
+    if effective_lookback_days > args.lookback_days:
+        logging.info(
+            "Extending lookback from %s to %s days to satisfy warm-start indicator history",
+            args.lookback_days,
+            effective_lookback_days,
+        )
+
+    closes = fetch_prices(UNIVERSE, period_days=effective_lookback_days)
     signals = compute_signals(closes, as_of=args.as_of)
 
     print_signal_table(signals)

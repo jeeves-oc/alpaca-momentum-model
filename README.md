@@ -62,6 +62,10 @@ Useful options:
 python strategy.py --execute --lookback-days 220 --as-of 2026-02-01
 ```
 
+Warm-start behavior:
+- The script now enforces a minimum indicator history window automatically.
+- If `--lookback-days` is too small, it is extended so the first rebalance can use fully-formed momentum/SMA signals instead of an artificial cash-only start.
+
 ## Static PV-Style Dashboard (GitHub Pages)
 
 Live Pages URL: https://jeeves-oc.github.io/alpaca-momentum-model/
