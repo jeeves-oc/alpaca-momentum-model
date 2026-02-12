@@ -26,11 +26,10 @@ def resolve_sim_end(today: date | None = None) -> str:
 
 
 SIM_END = resolve_sim_end()
-MOMENTUM_LOOKBACK = 126
+MOMENTUM_LOOKBACK_MONTHS = 6
 SMA_WINDOW = 135
 TOP_N = 3
-CASH_ANNUAL_RETURN = 0.0
-RISK_FREE_ANNUAL = 0.0
+FRED_DGS3MO_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO"
 OUT_DIR = Path("docs")
 
 
@@ -66,7 +65,35 @@ def monthly_rebalance_dates(index: pd.DatetimeIndex) -> list[pd.Timestamp]:
     return list(s.groupby(sim_idx.to_period("M")).max().values)
 
 
-def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[RebalanceDecision]]:
+def load_risk_free_monthly(index: pd.DatetimeIndex) -> pd.Series:
+    rf = pd.read_csv(FRED_DGS3MO_CSV)
+    rf["DATE"] = pd.to_datetime(rf["DATE"])
+    rf["DGS3MO"] = pd.to_numeric(rf["DGS3MO"], errors="coerce")
+    rf = rf.dropna(subset=["DGS3MO"]).set_index("DATE").sort_index()
+    monthly_annual_yield = (rf["DGS3MO"] / 100.0).resample("ME").last().ffill()
+    target_months = index.to_period("M").to_timestamp("M")
+    monthly_annual_yield = monthly_annual_yield.reindex(target_months).ffill()
+    monthly_annual_yield.index = index
+    return monthly_annual_yield
+
+
+def price_on_or_before(series: pd.Series, target_date: pd.Timestamp) -> float | None:
+    hist = series.loc[:target_date].dropna()
+    if hist.empty:
+        return None
+    return float(hist.iloc[-1])
+
+
+def six_calendar_month_momentum(series: pd.Series, as_of: pd.Timestamp) -> float | None:
+    current = price_on_or_before(series, as_of)
+    lookback_target = as_of - pd.DateOffset(months=MOMENTUM_LOOKBACK_MONTHS)
+    lookback = price_on_or_before(series, lookback_target)
+    if current is None or lookback is None or lookback == 0:
+        return None
+    return current / lookback - 1.0
+
+
+def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[RebalanceDecision], pd.Series]:
     prices = prices.copy()
     universe_px = prices[UNIVERSE]
 
@@ -87,9 +114,11 @@ def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[Reb
 
             for t in UNIVERSE:
                 series = universe_px[t].loc[:dt].dropna()
-                if len(series) < max(MOMENTUM_LOOKBACK + 1, SMA_WINDOW):
+                if len(series) < SMA_WINDOW:
                     continue
-                mom = series.iloc[-1] / series.iloc[-(MOMENTUM_LOOKBACK + 1)] - 1
+                mom = six_calendar_month_momentum(series, dt)
+                if mom is None:
+                    continue
                 sma = series.iloc[-SMA_WINDOW:].mean()
                 momentum_scores[t] = float(mom)
                 sma_pass[t] = bool(series.iloc[-1] > sma)
@@ -123,7 +152,12 @@ def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[Reb
     weights = weights.loc[sim_idx]
     returns = returns.loc[sim_idx]
 
-    cash_daily = (1 + CASH_ANNUAL_RETURN) ** (1 / 252.0) - 1
+    rf_monthly_annualized = load_risk_free_monthly(sim_idx)
+    month_key = sim_idx.to_period("M")
+    monthly_simple = (rf_monthly_annualized / 12.0).clip(lower=-0.99)
+    days_in_month = pd.Series(month_key, index=sim_idx).groupby(month_key).transform("size").astype(float)
+    cash_daily = ((1.0 + monthly_simple).pow(1.0 / days_in_month) - 1.0).fillna(0.0)
+
     invested = (weights * returns).sum(axis=1)
     cash_component = (1.0 - weights.sum(axis=1)) * cash_daily
     strategy_ret = invested + cash_component
@@ -156,7 +190,7 @@ def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[Reb
     equity = (1 + rets).cumprod()
     drawdown = equity / equity.cummax() - 1
 
-    return rets, drawdown, decisions
+    return rets, drawdown, decisions, rf_monthly_annualized
 
 
 def annualized_return(r: pd.Series) -> float:
@@ -171,16 +205,20 @@ def annualized_vol(r: pd.Series) -> float:
     return r.std(ddof=0) * np.sqrt(252)
 
 
-def sharpe(r: pd.Series, rf_annual: float = 0.0) -> float:
-    rf_daily = (1 + rf_annual) ** (1 / 252.0) - 1
-    ex = r - rf_daily
+def sharpe(r: pd.Series, rf_daily: pd.Series) -> float:
+    aligned = pd.concat([r, rf_daily], axis=1).dropna()
+    if aligned.empty:
+        return np.nan
+    ex = aligned.iloc[:, 0] - aligned.iloc[:, 1]
     denom = ex.std(ddof=0)
     return np.nan if denom == 0 else ex.mean() / denom * np.sqrt(252)
 
 
-def sortino(r: pd.Series, rf_annual: float = 0.0) -> float:
-    rf_daily = (1 + rf_annual) ** (1 / 252.0) - 1
-    ex = r - rf_daily
+def sortino(r: pd.Series, rf_daily: pd.Series) -> float:
+    aligned = pd.concat([r, rf_daily], axis=1).dropna()
+    if aligned.empty:
+        return np.nan
+    ex = aligned.iloc[:, 0] - aligned.iloc[:, 1]
     downside = ex[ex < 0]
     if len(downside) == 0:
         return np.nan
@@ -204,7 +242,7 @@ def yearly_returns(r: pd.Series) -> pd.Series:
     return (1 + r).groupby(r.index.year).prod() - 1
 
 
-def metrics_table(rets: pd.DataFrame) -> pd.DataFrame:
+def metrics_table(rets: pd.DataFrame, rf_daily: pd.Series) -> pd.DataFrame:
     rows = {}
     for c in rets.columns:
         r = rets[c]
@@ -212,13 +250,13 @@ def metrics_table(rets: pd.DataFrame) -> pd.DataFrame:
         rows[c] = {
             "CAGR": annualized_return(r),
             "Volatility": annualized_vol(r),
-            "Sharpe": sharpe(r, RISK_FREE_ANNUAL),
-            "Sortino": sortino(r, RISK_FREE_ANNUAL),
+            "Sharpe": sharpe(r, rf_daily),
+            "Sortino": sortino(r, rf_daily),
             "Calmar": calmar(r),
-            "MaxDrawdown": max_drawdown(r),
-            "BestYear": y.max() if len(y) else np.nan,
-            "WorstYear": y.min() if len(y) else np.nan,
-            "WinRate": float((r > 0).mean()),
+            "Maximum Drawdown": max_drawdown(r),
+            "Best Year": y.max() if len(y) else np.nan,
+            "Worst Year": y.min() if len(y) else np.nan,
+            "Win Rate": float((r > 0).mean()),
         }
     return pd.DataFrame(rows).T
 
@@ -232,10 +270,10 @@ def monthly_table(r: pd.Series) -> pd.DataFrame:
     return p
 
 
-def risk_analytics_table(rets: pd.DataFrame, market_col: str = "VFINX") -> pd.DataFrame:
+def risk_analytics_table(rets: pd.DataFrame, rf_monthly_annualized: pd.Series, market_col: str = "VFINX") -> pd.DataFrame:
     monthly = (1 + rets).resample("ME").prod() - 1
     market = monthly[market_col]
-    rf_monthly = (1 + RISK_FREE_ANNUAL) ** (1 / 12.0) - 1
+    rf_monthly = (rf_monthly_annualized.resample("ME").last() / 12.0).reindex(monthly.index).ffill()
 
     rows: dict[str, dict[str, float]] = {}
     for c in monthly.columns:
@@ -339,7 +377,7 @@ def generate_html(
     equity = (1 + rets).cumprod()
 
     metrics_disp = metrics.copy()
-    for c in ["CAGR", "Volatility", "MaxDrawdown", "BestYear", "WorstYear", "WinRate"]:
+    for c in ["CAGR", "Volatility", "Maximum Drawdown", "Best Year", "Worst Year", "Win Rate"]:
         metrics_disp[c] = metrics_disp[c].map(to_pct)
     for c in ["Sharpe", "Sortino", "Calmar"]:
         metrics_disp[c] = metrics_disp[c].map(to_num)
@@ -425,23 +463,26 @@ small{{color:var(--muted);}}
   </div>
   <div class=\"banner\">✅ Monthly refresh complete. Simulation window: {SIM_START} → {SIM_END}. Updated UTC: {now_utc.strftime('%Y-%m-%d %H:%M:%S')} | Local (America/New_York): {now_local.strftime('%Y-%m-%d %H:%M:%S %Z')}</div>
 
+  <section class=\"card\">
+    <h3>Strategy Overview</h3>
+    <small>Universe: {', '.join(UNIVERSE)}. Rebalance frequency: month-end trading close. Signal: 6-calendar-month momentum with prior-trading-day fallback on holidays/weekends. Selection: top {TOP_N} assets with 135-day SMA filter; failed sleeves stay in cash using 3-Month T-Bill convention.</small>
+  </section>
+
   <section class=\"grid\">
     <div class=\"card\"><div class=\"k\">Strategy CAGR</div><div class=\"v\">{to_pct(metrics.loc['Strategy','CAGR'])}</div></div>
-    <div class=\"card\"><div class=\"k\">Strategy Max Drawdown</div><div class=\"v\">{to_pct(metrics.loc['Strategy','MaxDrawdown'])}</div></div>
-    <div class=\"card\"><div class=\"k\">Strategy Sharpe</div><div class=\"v\">{to_num(metrics.loc['Strategy','Sharpe'])}</div></div>
-    <div class=\"card\"><div class=\"k\">Strategy Sortino</div><div class=\"v\">{to_num(metrics.loc['Strategy','Sortino'])}</div></div>
+    <div class=\"card\"><div class=\"k\">Maximum Drawdown</div><div class=\"v\">{to_pct(metrics.loc['Strategy','Maximum Drawdown'])}</div></div>
+    <div class=\"card\"><div class=\"k\">Sharpe Ratio</div><div class=\"v\">{to_num(metrics.loc['Strategy','Sharpe'])}</div></div>
+    <div class=\"card\"><div class=\"k\">Sortino Ratio</div><div class=\"v\">{to_num(metrics.loc['Strategy','Sortino'])}</div></div>
   </section>
 
   <section class=\"card\"><h3>Performance Summary</h3>{html_table(metrics_disp)}</section>
-  <section class=\"card\"><h3>Risk Analytics (monthly-derived, market = VFINX)</h3>{html_table(risk_disp)}</section>
-
-  <section class=\"card\"><h3>Equity Curve</h3><div id=\"equity\" style=\"height:420px\"></div></section>
-  <section class=\"card\"><h3>Drawdown Curve</h3><div id=\"dd\" style=\"height:340px\"></div></section>
-
-  <section class=\"card\"><h3>Calendar Year Returns</h3>{html_table(yearly, percent_cols=set(yearly.columns))}</section>
-  <section class=\"card\"><h3>Monthly Returns (Strategy)</h3>{html_table(month, percent_cols=set(month.columns))}</section>
-  <section class=\"card\"><h3>Holdings / Weights Timeline (Monthly Rebalance)</h3>{html_table(holdings, percent_cols=set(holdings.columns)) if not holdings.empty else '<p>No holdings records.</p>'}</section>
-  <section class=\"card\"><h3>Rebalance Log (Top-3, SMA filter, cash sleeves)</h3>{html_table(log_df, percent_cols={c for c in log_df.columns if c.startswith('Mom_')}) if not log_df.empty else '<p>No rebalance records.</p>'}</section>
+  <section class=\"card\"><h3>Performance Summary</h3><div id=\"equity\" style=\"height:420px\"></div>{html_table(metrics_disp)}</section>
+  <section class=\"card\"><h3>Annual Returns</h3>{html_table(yearly, percent_cols=set(yearly.columns))}</section>
+  <section class=\"card\"><h3>Monthly Returns</h3>{html_table(month, percent_cols=set(month.columns))}</section>
+  <section class=\"card\"><h3>Drawdown Analysis</h3><div id=\"dd\" style=\"height:340px\"></div>{html_table(risk_disp)}</section>
+  <section class=\"card\"><h3>Rolling Returns</h3><div id=\"rolling12\" style=\"height:340px\"></div></section>
+  <section class=\"card\"><h3>Exposure/Holdings</h3>{html_table(holdings, percent_cols=set(holdings.columns)) if not holdings.empty else '<p>No holdings records.</p>'}</section>
+  <section class=\"card\"><h3>Rebalance Log</h3>{html_table(log_df, percent_cols={c for c in log_df.columns if c.startswith('Mom_')}) if not log_df.empty else '<p>No rebalance records.</p>'}</section>
 
   <section class=\"card\">
     <h3>Methodology / Metadata</h3>
@@ -449,9 +490,9 @@ small{{color:var(--muted);}}
       Data source: Yahoo Finance via yfinance (auto_adjust=True).<br>
       Universe: {', '.join(UNIVERSE)}. Benchmark: VFINX + equal-weight monthly rebalanced universe.<br>
       Warmup starts at {WARMUP_START}; simulation window is {SIM_START} through {SIM_END} inclusive (trading-calendar aware).<br>
-      Rebalance: month-end close; rank by 126-trading-day momentum; select top 3; 135-trading-day SMA filter per sleeve; failed sleeve in cash.<br>
+      Rebalance: month-end close; rank by 6-calendar-month momentum with prior-trading-day fallback; select top 3; 135-trading-day SMA filter per sleeve; failed sleeve in cash at 3-Month T-Bill convention.<br>
       DBC availability policy: excluded from ranking until historical data exists on date (no synthetic pre-inception).<br>
-      Cash annual return assumption: {CASH_ANNUAL_RETURN:.2%}; risk-free for Sharpe/Sortino/CAPM alpha: {RISK_FREE_ANNUAL:.2%}.<br>
+      Risk-Free Rate source: FRED DGS3MO (3-Month Treasury Bill, secondary market), converted to monthly yield as `annual_yield/12` and compounded daily within each month.<br>
       Risk analytics table uses monthly compounded returns: alpha annualized from monthly CAPM intercept; tracking error annualized from monthly active returns; VaR/CVaR shown at 95% monthly tail.
     </small>
   </section>
@@ -462,7 +503,9 @@ function traces(kind){{
   return Object.keys(data[kind]).map(k => ({{x:data.dates,y:data[kind][k],name:k,type:'scatter',mode:'lines'}}));
 }}
 Plotly.newPlot('equity', traces('equity'), {{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{{color:getComputedStyle(document.body).getPropertyValue('--text')}}}});
-Plotly.newPlot('dd', traces('drawdown'), {{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{{color:getComputedStyle(document.body).getPropertyValue('--text')}},yaxis:{{tickformat:'.0%'}}}});
+Plotly.newPlot('dd', traces('drawdown'), {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:getComputedStyle(document.body).getPropertyValue('--text')},yaxis:{tickformat:'.0%'}});
+const roll = Object.keys(data.equity).map(k => ({x:data.dates,y:data.equity[k].map((_,i,a)=> i<252?null:(a[i]/a[i-252]-1)),name:k,type:'scatter',mode:'lines'}));
+Plotly.newPlot('rolling12', roll, {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:getComputedStyle(document.body).getPropertyValue('--text')},yaxis:{tickformat:'.0%'}});
 function toggleTheme(){{
   document.documentElement.classList.toggle('light');
   localStorage.setItem('theme', document.documentElement.classList.contains('light')?'light':'dark');
@@ -478,9 +521,13 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     prices = fetch_prices()
-    rets, drawdown, decisions = simulate(prices)
-    metrics = metrics_table(rets)
-    risk_metrics = risk_analytics_table(rets)
+    rets, drawdown, decisions, rf_monthly_annualized = simulate(prices)
+    sim_months = rets.index.to_period("M")
+    monthly_simple = (rf_monthly_annualized / 12.0).clip(lower=-0.99)
+    days_in_month = pd.Series(sim_months, index=rets.index).groupby(sim_months).transform("size").astype(float)
+    rf_daily = ((1.0 + monthly_simple).pow(1.0 / days_in_month) - 1.0).fillna(0.0)
+    metrics = metrics_table(rets, rf_daily)
+    risk_metrics = risk_analytics_table(rets, rf_monthly_annualized)
 
     html = generate_html(rets, drawdown, metrics, risk_metrics, decisions)
     (OUT_DIR / "index.html").write_text(html, encoding="utf-8")
@@ -497,10 +544,10 @@ def main() -> None:
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "universe": UNIVERSE,
         "benchmarks": ["EqualWeight", "VFINX"],
-        "momentum_lookback_days": MOMENTUM_LOOKBACK,
+        "momentum_lookback_months": MOMENTUM_LOOKBACK_MONTHS,
         "sma_window_days": SMA_WINDOW,
         "top_n": TOP_N,
-        "cash_annual_return": CASH_ANNUAL_RETURN,
+        "risk_free_source": "FRED:DGS3MO",
     }
     (OUT_DIR / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 

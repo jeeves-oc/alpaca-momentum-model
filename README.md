@@ -6,7 +6,7 @@ Educational Python implementation of a simple ETF momentum rotation strategy int
 
 - **Universe:** `SPY`, `QQQ`, `TLT`, `DBC`, `GLD`
 - **Rebalance cadence:** Monthly
-- **Signal 1 (Ranking):** Select top 3 assets by **6-month momentum** (approx. 126 trading days total return)
+- **Signal 1 (Ranking):** Select top 3 assets by **6-calendar-month momentum** (month-end to month-end, prior-trading-day fallback on holidays/weekends)
 - **Signal 2 (Trend filter):** For each selected asset, require price > **135 trading day SMA**
 - **Cash sleeve:** If a selected asset fails the SMA filter, that sleeve remains in cash
 
@@ -90,11 +90,11 @@ Backtest/report assumptions implemented:
 - Simulation window: `2007-01-01` through end of the last completed month (inclusive, trading-calendar aware)
 - Adjusted prices via `yfinance` with `auto_adjust=True`
 - Rebalance: month-end close
-- Signal: top-3 by 126-trading-day momentum
+- Signal: top-3 by 6-calendar-month momentum (month-end anchored)
 - Trend filter: 135-trading-day SMA (`price > SMA135`)
 - Sleeve-to-cash behavior when SMA fails
 - Benchmarks: universe equal-weight (monthly rebalanced) + `VFINX`
-- Cash return assumption: 0.00% annualized
+- Cash + Risk-Free convention: FRED `DGS3MO` (3-Month Treasury Bill, secondary market), converted to monthly yield as `annual_yield/12` and compounded within month
 
 ## GitHub Actions monthly refresh
 
