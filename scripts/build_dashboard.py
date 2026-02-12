@@ -223,6 +223,72 @@ def monthly_table(r: pd.Series) -> pd.DataFrame:
     return p
 
 
+def risk_analytics_table(rets: pd.DataFrame, market_col: str = "VFINX") -> pd.DataFrame:
+    monthly = (1 + rets).resample("ME").prod() - 1
+    market = monthly[market_col]
+    rf_monthly = (1 + RISK_FREE_ANNUAL) ** (1 / 12.0) - 1
+
+    rows: dict[str, dict[str, float]] = {}
+    for c in monthly.columns:
+        asset = monthly[c].dropna()
+        aligned = pd.concat([asset, market], axis=1, join="inner").dropna()
+        aligned.columns = ["asset", "market"]
+        if aligned.empty:
+            continue
+
+        cov = aligned["asset"].cov(aligned["market"])
+        var_m = aligned["market"].var(ddof=0)
+        beta = np.nan if var_m == 0 else cov / var_m
+        corr = aligned["asset"].corr(aligned["market"])
+        r2 = np.nan if pd.isna(corr) else corr**2
+
+        ex_asset = aligned["asset"] - rf_monthly
+        ex_market = aligned["market"] - rf_monthly
+        alpha_m = np.nan if pd.isna(beta) else (ex_asset - beta * ex_market).mean()
+        alpha_ann = np.nan if pd.isna(alpha_m) else (1 + alpha_m) ** 12 - 1
+
+        tracking = aligned["asset"] - aligned["market"]
+        te = tracking.std(ddof=0) * np.sqrt(12)
+        ir = np.nan if te == 0 else (tracking.mean() * 12) / te
+
+        mean_ann = annualized_return(rets[c].dropna())
+        treynor = np.nan if pd.isna(beta) or beta == 0 else (mean_ann - RISK_FREE_ANNUAL) / beta
+
+        var95 = aligned["asset"].quantile(0.05)
+        cvar95 = aligned.loc[aligned["asset"] <= var95, "asset"].mean()
+
+        pos = aligned["asset"] > 0
+        positive_periods = float(pos.mean())
+        gains = aligned.loc[aligned["asset"] > 0, "asset"]
+        losses = aligned.loc[aligned["asset"] < 0, "asset"]
+        gain_loss_ratio = np.nan if losses.empty else gains.mean() / abs(losses.mean())
+
+        up = aligned[aligned["market"] > 0]
+        down = aligned[aligned["market"] < 0]
+        upside_capture = np.nan if up.empty or up["market"].mean() == 0 else up["asset"].mean() / up["market"].mean()
+        downside_capture = np.nan if down.empty or down["market"].mean() == 0 else down["asset"].mean() / down["market"].mean()
+
+        rows[c] = {
+            "CorrToMarket": corr,
+            "Beta": beta,
+            "AlphaAnn": alpha_ann,
+            "R2": r2,
+            "Treynor": treynor,
+            "TrackingErrorAnn": te,
+            "InformationRatio": ir,
+            "Skewness": aligned["asset"].skew(),
+            "Kurtosis": aligned["asset"].kurt(),
+            "VaR95_Monthly": var95,
+            "CVaR95_Monthly": cvar95,
+            "PositiveMonths": positive_periods,
+            "GainLossRatio": gain_loss_ratio,
+            "UpsideCapture": upside_capture,
+            "DownsideCapture": downside_capture,
+        }
+
+    return pd.DataFrame(rows).T
+
+
 def to_pct(x: float) -> str:
     if pd.isna(x):
         return "—"
@@ -254,7 +320,13 @@ def html_table(df: pd.DataFrame, percent_cols: set[str] | None = None, precision
     return f"<table><thead><tr>{headers}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
 
 
-def generate_html(rets: pd.DataFrame, drawdown: pd.DataFrame, metrics: pd.DataFrame, decisions: list[RebalanceDecision]) -> str:
+def generate_html(
+    rets: pd.DataFrame,
+    drawdown: pd.DataFrame,
+    metrics: pd.DataFrame,
+    risk_metrics: pd.DataFrame,
+    decisions: list[RebalanceDecision],
+) -> str:
     equity = (1 + rets).cumprod()
 
     metrics_disp = metrics.copy()
@@ -262,6 +334,14 @@ def generate_html(rets: pd.DataFrame, drawdown: pd.DataFrame, metrics: pd.DataFr
         metrics_disp[c] = metrics_disp[c].map(to_pct)
     for c in ["Sharpe", "Sortino", "Calmar"]:
         metrics_disp[c] = metrics_disp[c].map(to_num)
+
+    risk_disp = risk_metrics.copy()
+    for c in ["AlphaAnn", "TrackingErrorAnn", "VaR95_Monthly", "CVaR95_Monthly", "PositiveMonths"]:
+        if c in risk_disp.columns:
+            risk_disp[c] = risk_disp[c].map(to_pct)
+    for c in ["CorrToMarket", "Beta", "R2", "Treynor", "InformationRatio", "Skewness", "Kurtosis", "GainLossRatio", "UpsideCapture", "DownsideCapture"]:
+        if c in risk_disp.columns:
+            risk_disp[c] = risk_disp[c].map(to_num)
 
     yearly = ((1 + rets).groupby(rets.index.year).prod() - 1).copy()
     yearly.index.name = "Year"
@@ -344,6 +424,7 @@ small{{color:var(--muted);}}
   </section>
 
   <section class=\"card\"><h3>Performance Summary</h3>{html_table(metrics_disp)}</section>
+  <section class=\"card\"><h3>Risk Analytics (monthly-derived, market = VFINX)</h3>{html_table(risk_disp)}</section>
 
   <section class=\"card\"><h3>Equity Curve</h3><div id=\"equity\" style=\"height:420px\"></div></section>
   <section class=\"card\"><h3>Drawdown Curve</h3><div id=\"dd\" style=\"height:340px\"></div></section>
@@ -361,7 +442,8 @@ small{{color:var(--muted);}}
       Warmup starts at {WARMUP_START}; simulation window is {SIM_START} through {SIM_END} inclusive (trading-calendar aware).<br>
       Rebalance: month-end close; rank by 126-trading-day momentum; select top 3; 135-trading-day SMA filter per sleeve; failed sleeve in cash.<br>
       DBC availability policy: excluded from ranking until historical data exists on date (no synthetic pre-inception).<br>
-      Cash annual return assumption: {CASH_ANNUAL_RETURN:.2%}; risk-free for Sharpe/Sortino: {RISK_FREE_ANNUAL:.2%}.
+      Cash annual return assumption: {CASH_ANNUAL_RETURN:.2%}; risk-free for Sharpe/Sortino/CAPM alpha: {RISK_FREE_ANNUAL:.2%}.<br>
+      Risk analytics table uses monthly compounded returns: alpha annualized from monthly CAPM intercept; tracking error annualized from monthly active returns; VaR/CVaR shown at 95% monthly tail.
     </small>
   </section>
 </div>
@@ -389,11 +471,13 @@ def main() -> None:
     prices = fetch_prices()
     rets, drawdown, decisions = simulate(prices)
     metrics = metrics_table(rets)
+    risk_metrics = risk_analytics_table(rets)
 
-    html = generate_html(rets, drawdown, metrics, decisions)
+    html = generate_html(rets, drawdown, metrics, risk_metrics, decisions)
     (OUT_DIR / "index.html").write_text(html, encoding="utf-8")
 
     metrics.to_csv(OUT_DIR / "metrics.csv")
+    risk_metrics.to_csv(OUT_DIR / "risk_metrics.csv")
     rets.to_csv(OUT_DIR / "returns.csv")
     drawdown.to_csv(OUT_DIR / "drawdowns.csv")
 
