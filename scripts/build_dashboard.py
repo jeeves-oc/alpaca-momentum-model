@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,7 +16,16 @@ UNIVERSE = ["SPY", "QQQ", "TLT", "DBC", "GLD"]
 BENCHMARKS = ["VFINX"]
 WARMUP_START = "2006-12-31"
 SIM_START = "2007-01-01"
-SIM_END = "2026-01-31"
+
+
+def resolve_sim_end(today: date | None = None) -> str:
+    today = today or datetime.now(timezone.utc).date()
+    first_of_month = today.replace(day=1)
+    last_day_prev_month = first_of_month - pd.Timedelta(days=1)
+    return last_day_prev_month.strftime("%Y-%m-%d")
+
+
+SIM_END = resolve_sim_end()
 MOMENTUM_LOOKBACK = 126
 SMA_WINDOW = 135
 TOP_N = 3

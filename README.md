@@ -83,7 +83,7 @@ Generated artifacts:
 Backtest/report assumptions implemented:
 
 - Warmup start: `2006-12-31`
-- Simulation window: `2007-01-01` through `2026-01-31` (inclusive, trading-calendar aware)
+- Simulation window: `2007-01-01` through end of the last completed month (inclusive, trading-calendar aware)
 - Adjusted prices via `yfinance` with `auto_adjust=True`
 - Rebalance: month-end close
 - Signal: top-3 by 126-trading-day momentum
