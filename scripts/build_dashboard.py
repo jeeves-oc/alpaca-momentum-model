@@ -193,12 +193,12 @@ def simulate(prices: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, list[Reb
     return rets, drawdown, decisions, rf_monthly_annualized
 
 
-def annualized_return(r: pd.Series) -> float:
+def annualized_return(r: pd.Series, periods_per_year: int = 252) -> float:
     n = len(r)
     if n == 0:
         return np.nan
     total = (1 + r).prod()
-    return total ** (252 / n) - 1
+    return total ** (periods_per_year / n) - 1
 
 
 def annualized_vol(r: pd.Series) -> float:
@@ -299,7 +299,7 @@ def risk_analytics_table(rets: pd.DataFrame, rf_monthly_annualized: pd.Series, m
         ir = np.nan if te == 0 else (tracking.mean() * 12) / te
 
         mean_ann = annualized_return(rets[c].dropna())
-        rf_ann = annualized_return(rf_monthly.reindex(aligned.index).dropna())
+        rf_ann = annualized_return(rf_monthly.reindex(aligned.index).dropna(), periods_per_year=12)
         treynor = np.nan if pd.isna(beta) or beta == 0 or pd.isna(rf_ann) else (mean_ann - rf_ann) / beta
 
         var95 = aligned["asset"].quantile(0.05)

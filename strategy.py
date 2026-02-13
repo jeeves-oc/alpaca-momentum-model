@@ -4,7 +4,7 @@
 Rules:
 - Universe: SPY, QQQ, TLT, DBC, GLD
 - Monthly rebalance
-- Top 3 by 6-month momentum (126 trading day return)
+- Top 3 by 6-calendar-month momentum (month-end anchored with prior-trading-day fallback)
 - 135 trading day SMA filter per selected asset
 - Failed sleeves remain cash
 
