@@ -299,7 +299,8 @@ def risk_analytics_table(rets: pd.DataFrame, rf_monthly_annualized: pd.Series, m
         ir = np.nan if te == 0 else (tracking.mean() * 12) / te
 
         mean_ann = annualized_return(rets[c].dropna())
-        treynor = np.nan if pd.isna(beta) or beta == 0 else (mean_ann - RISK_FREE_ANNUAL) / beta
+        rf_ann = annualized_return(rf_monthly.reindex(aligned.index).dropna())
+        treynor = np.nan if pd.isna(beta) or beta == 0 or pd.isna(rf_ann) else (mean_ann - rf_ann) / beta
 
         var95 = aligned["asset"].quantile(0.05)
         cvar95 = aligned.loc[aligned["asset"] <= var95, "asset"].mean()
@@ -476,7 +477,7 @@ small{{color:var(--muted);}}
   </section>
 
   <section class=\"card\"><h3>Performance Summary</h3>{html_table(metrics_disp)}</section>
-  <section class=\"card\"><h3>Performance Summary</h3><div id=\"equity\" style=\"height:420px\"></div>{html_table(metrics_disp)}</section>
+  <section class=\"card\"><h3>Cumulative Returns</h3><div id=\"equity\" style=\"height:420px\"></div></section>
   <section class=\"card\"><h3>Annual Returns</h3>{html_table(yearly, percent_cols=set(yearly.columns))}</section>
   <section class=\"card\"><h3>Monthly Returns</h3>{html_table(month, percent_cols=set(month.columns))}</section>
   <section class=\"card\"><h3>Drawdown Analysis</h3><div id=\"dd\" style=\"height:340px\"></div>{html_table(risk_disp)}</section>
