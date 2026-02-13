@@ -504,9 +504,9 @@ function traces(kind){{
   return Object.keys(data[kind]).map(k => ({{x:data.dates,y:data[kind][k],name:k,type:'scatter',mode:'lines'}}));
 }}
 Plotly.newPlot('equity', traces('equity'), {{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{{color:getComputedStyle(document.body).getPropertyValue('--text')}}}});
-Plotly.newPlot('dd', traces('drawdown'), {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:getComputedStyle(document.body).getPropertyValue('--text')},yaxis:{tickformat:'.0%'}});
-const roll = Object.keys(data.equity).map(k => ({x:data.dates,y:data.equity[k].map((_,i,a)=> i<252?null:(a[i]/a[i-252]-1)),name:k,type:'scatter',mode:'lines'}));
-Plotly.newPlot('rolling12', roll, {paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{color:getComputedStyle(document.body).getPropertyValue('--text')},yaxis:{tickformat:'.0%'}});
+Plotly.newPlot('dd', traces('drawdown'), {{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{{color:getComputedStyle(document.body).getPropertyValue('--text')}},yaxis:{{tickformat:'.0%'}}}});
+const roll = Object.keys(data.equity).map(k => ({{x:data.dates,y:data.equity[k].map((_,i,a)=> i<252?null:(a[i]/a[i-252]-1)),name:k,type:'scatter',mode:'lines'}}));
+Plotly.newPlot('rolling12', roll, {{paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)',font:{{color:getComputedStyle(document.body).getPropertyValue('--text')}},yaxis:{{tickformat:'.0%'}}}});
 function toggleTheme(){{
   document.documentElement.classList.toggle('light');
   localStorage.setItem('theme', document.documentElement.classList.contains('light')?'light':'dark');
