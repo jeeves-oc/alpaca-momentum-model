@@ -4,7 +4,7 @@
 Rules:
 - Universe: SPY, QQQ, TLT, DBC, GLD
 - Monthly rebalance
-- Top 3 by 6-month momentum (126 trading day return)
+- Top 3 by 6-calendar-month momentum (month-end anchored with prior-trading-day fallback)
 - 135 trading day SMA filter per selected asset
 - Failed sleeves remain cash
 
@@ -30,7 +30,7 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 UNIVERSE = ["SPY", "QQQ", "TLT", "DBC", "GLD"]
-MOMENTUM_LOOKBACK_TRADING_DAYS = 126  # ~6 months
+MOMENTUM_LOOKBACK_MONTHS = 6
 SMA_WINDOW = 135
 TOP_N = 3
 
@@ -72,7 +72,7 @@ def get_trading_client() -> TradingClient:
 
 def required_lookback_trading_days() -> int:
     # Need one extra bar for pct_change plus enough bars for SMA.
-    return max(SMA_WINDOW, MOMENTUM_LOOKBACK_TRADING_DAYS + 1)
+    return max(SMA_WINDOW, 150)
 
 
 def trading_days_to_calendar_days(trading_days: int, extra_calendar_buffer: int = 21) -> int:
@@ -102,24 +102,44 @@ def fetch_prices(symbols: List[str], period_days: int) -> pd.DataFrame:
     return closes
 
 
+
+
+def price_on_or_before(series: pd.Series, target_date: pd.Timestamp) -> float | None:
+    hist = series.loc[:target_date].dropna()
+    if hist.empty:
+        return None
+    return float(hist.iloc[-1])
+
+
+def six_calendar_month_momentum(series: pd.Series, as_of: pd.Timestamp) -> float | None:
+    current = price_on_or_before(series, as_of)
+    lookback_target = as_of - pd.DateOffset(months=MOMENTUM_LOOKBACK_MONTHS)
+    lookback = price_on_or_before(series, lookback_target)
+    if current is None or lookback is None or lookback == 0:
+        return None
+    return current / lookback - 1.0
+
 def compute_signals(closes: pd.DataFrame, as_of: str | None = None) -> List[SignalRow]:
     if as_of:
         as_of_dt = pd.Timestamp(as_of)
         closes = closes.loc[:as_of_dt]
 
-    if len(closes) < max(SMA_WINDOW, MOMENTUM_LOOKBACK_TRADING_DAYS) + 1:
+    if len(closes) < SMA_WINDOW + 1:
         raise RuntimeError("Not enough history to compute momentum and SMA")
 
     latest = closes.iloc[-1]
-    momentum = closes.pct_change(MOMENTUM_LOOKBACK_TRADING_DAYS).iloc[-1]
     sma = closes.rolling(SMA_WINDOW).mean().iloc[-1]
 
     rows: List[SignalRow] = []
+    as_of_dt = closes.index[-1]
     for symbol in UNIVERSE:
+        series = closes[symbol].dropna()
+        m = six_calendar_month_momentum(series, as_of_dt)
+        if m is None:
+            continue
         c = float(latest[symbol])
-        m = float(momentum[symbol])
         s = float(sma[symbol])
-        rows.append(SignalRow(symbol=symbol, close=c, momentum_6m=m, sma_135=s, passes_sma=c > s))
+        rows.append(SignalRow(symbol=symbol, close=c, momentum_6m=float(m), sma_135=s, passes_sma=c > s))
 
     rows.sort(key=lambda x: x.momentum_6m, reverse=True)
     return rows
@@ -139,7 +159,7 @@ def build_target_weights(signal_rows: List[SignalRow]) -> Dict[str, float]:
 
 
 def print_signal_table(rows: List[SignalRow]) -> None:
-    logging.info("Signal table (sorted by 6m momentum):")
+    logging.info("Signal table (sorted by 6-calendar-month momentum):")
     for r in rows:
         logging.info(
             "%s | close=%.2f | mom6m=%+.2f%% | sma135=%.2f | pass=%s",
